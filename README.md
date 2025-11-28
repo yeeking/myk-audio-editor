@@ -4,6 +4,8 @@ I confess I did not write a single line of C++ for this program. Just trying out
 
 It turned out quite well so I'm dumping it here. 
 
+<img width="1031" height="698" alt="image" src="https://github.com/user-attachments/assets/d9748059-b246-445e-bd59-bbd9874f97a4" />
+
 
 # Build it
 
