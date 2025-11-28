@@ -1050,7 +1050,13 @@ private:
            #endif
         }
         if (lower.contains ("m4a"))
+        {
+           #if JUCE_MAC || JUCE_IOS
             return std::make_unique<juce::CoreAudioFormat>();
+           #else
+            return nullptr;
+           #endif
+        }
 
         return std::make_unique<juce::WavAudioFormat>();
     }
