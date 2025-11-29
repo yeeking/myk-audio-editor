@@ -204,7 +204,7 @@ bool AudioEngine::loadFile (const juce::File& file, juce::String& statusOut)
 
     segments.push_back ({ loadedFileLength, 0s });
 
-    thumbnail = std::make_unique<te::SmartThumbnail> (engine, audioFile, thumbnailComponent, nullptr);
+    // thumbnail = std::make_unique<te::SmartThumbnail> (engine, audioFile, thumbnailComponent, nullptr);
     rebuildTrack();
     statusOut = "Loaded " + file.getFileName();
     return true;
@@ -510,6 +510,7 @@ bool AudioEngine::normaliseRange (TimeRange range, juce::String& statusOut)
 
         regionClip->addEffect (vt);
         regionClip->setEffectsVisible (true);
+        regionClip->setGainDB(20.0f);
         statusOut = "Normalise effect added";
         updateDisplayThumbnailFromTrack();
         return true;
@@ -596,72 +597,25 @@ void AudioEngine::logTrackClipDebugInfo() const
     }
 }
 
+// void AudioEngine::updateDisplayThumbnailFromTrack()
+// {
+ 
+
+//     if (loadedFile.existsAsFile())
+//     {
+//         // displayFile = loadedFile;
+//         te::AudioFile audioFile (engine, loadedFile);
+//         thumbnail = std::make_unique<te::SmartThumbnail> (engine, audioFile, thumbnailComponent, nullptr);
+//     }
+// }
+
 void AudioEngine::updateDisplayThumbnailFromTrack()
 {
-    if (track != nullptr)
-    {
-        logTrackClipDebugInfo();
-
-        juce::File firstPlayableFile;
-        for (auto* c : track->getClips())
-        {
-
-            if (auto* ac = dynamic_cast<te::AudioClipBase*> (c))
-            {
-                auto clipPos = ac->getPosition();
-                auto pos = clipPos.time;
-                auto sourceFile = ac->getSourceFileReference().getFile();
-                auto playbackFile = ac->getPlaybackFile().getFile();
-                auto* clipEffects = ac->getClipEffects();
-
-                juce::String info;
-                info << "  clip " << ac->getName()
-                     << " timeline: " << pos.getStart().inSeconds() << "s -> " << pos.getEnd().inSeconds() << "s"
-                     << " sourceOffset: " << clipPos.offset.inSeconds() << "s"
-                     << " source: " << (sourceFile.existsAsFile() ? sourceFile.getFullPathName() : "<missing>")
-                     << " playback: " << (playbackFile.existsAsFile() ? playbackFile.getFullPathName() : "<missing>");
-                DBG (info);
-
-                if (clipEffects != nullptr)
-                {
-                    juce::String effectsInfo;
-                    effectsInfo << "    effects visible=" << (ac->getEffectsVisible() ? "yes" : "no");
-
-                    int idx = 0;
-                    for (auto* eff : clipEffects->objects)
-                    {
-                        juce::String effectName;
-                        if (eff != nullptr)
-                            effectName = eff->state[te::IDs::name].toString();
-                        if (effectName.isEmpty())
-                            effectName = "<unknown>";
-                        effectsInfo << "\n      [" << idx++ << "] " << effectName;
-                    }
-
-                    effectsInfo << "\n    effects range: start=" << clipEffects->getEffectsStartTime().inSeconds()
-                                << "s len=" << clipEffects->getEffectsLength().inSeconds() << "s";
-
-                    DBG (effectsInfo);
-                }
-
-                if (firstPlayableFile == juce::File() && playbackFile.existsAsFile())
-                    firstPlayableFile = playbackFile;
-
-            }
-        }
-
-        if (firstPlayableFile.existsAsFile())
-        {
-            displayFile = firstPlayableFile;
-            te::AudioFile audioFile (engine, firstPlayableFile);
-            thumbnail = std::make_unique<te::SmartThumbnail> (engine, audioFile, thumbnailComponent, nullptr);
-            return;
-        }
-    }
+ 
 
     if (loadedFile.existsAsFile())
     {
-        displayFile = loadedFile;
+        // displayFile = loadedFile;
         te::AudioFile audioFile (engine, loadedFile);
         thumbnail = std::make_unique<te::SmartThumbnail> (engine, audioFile, thumbnailComponent, nullptr);
     }
