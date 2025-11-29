@@ -24,6 +24,7 @@ juce_generate_juce_header(NonDestructiveEditorApp)
 set(APP_SOURCES
     src/MainController.cpp
     src/NonDestructiveEditorComponent.h
+    src/NonDestructiveEditorComponent.cpp
     src/AudioEngine.cpp
     src/AudioExporter.cpp
     src/common_sources.cpp
