@@ -52,8 +52,8 @@ void AudioExporter::showExportDialog (const ExportContext& context)
 
     dialog.addTextEditor (nameId, context.defaultName.isNotEmpty() ? context.defaultName : juce::String ("Export"), "Filename");
 
-    auto* wholeFileButton = new juce::ToggleButton ("Export whole file");
-    auto* selectionButton = new juce::ToggleButton ("Export selected region");
+    auto wholeFileButton = std::make_unique<juce::ToggleButton> ("Export whole file");
+    auto selectionButton = std::make_unique<juce::ToggleButton> ("Export selected region");
     wholeFileButton->setRadioGroupId (1);
     selectionButton->setRadioGroupId (1);
     wholeFileButton->setSize (220, 24);
@@ -61,13 +61,13 @@ void AudioExporter::showExportDialog (const ExportContext& context)
     selectionButton->setEnabled (context.hasSelection);
     selectionButton->setToggleState (context.hasSelection, juce::dontSendNotification);
     wholeFileButton->setToggleState (! context.hasSelection, juce::dontSendNotification);
-    dialog.addCustomComponent (wholeFileButton);
-    dialog.addCustomComponent (selectionButton);
+    dialog.addCustomComponent (wholeFileButton.get());
+    dialog.addCustomComponent (selectionButton.get());
 
-    auto* rangeLabel = new juce::Label ("rangeLabel", {});
+    auto rangeLabel = std::make_unique<juce::Label> ("rangeLabel", juce::String());
     rangeLabel->setJustificationType (juce::Justification::centredLeft);
     rangeLabel->setSize (340, 24);
-    dialog.addCustomComponent (rangeLabel);
+    dialog.addCustomComponent (rangeLabel.get());
 
     dialog.addComboBox (formatId, { "WAV", "AIFF", "FLAC", "OGG", "MP3", "M4A" }, "Format");
     auto* formatBox = dialog.getComboBoxComponent (formatId);
@@ -105,14 +105,16 @@ void AudioExporter::showExportDialog (const ExportContext& context)
             bitrateBox->setVisible (isMp3 || isM4a);
     };
 
-    auto updateExportRangeLabel = [rangeLabel, selectionButton, &context]
+    auto* rangeLabelPtr = rangeLabel.get();
+    auto* selectionButtonPtr = selectionButton.get();
+    auto updateExportRangeLabel = [rangeLabelPtr, selectionButtonPtr, &context]
     {
-        if (rangeLabel == nullptr)
+        if (rangeLabelPtr == nullptr)
             return;
 
-        const bool useSelection = context.hasSelection && selectionButton != nullptr && selectionButton->getToggleState();
+        const bool useSelection = context.hasSelection && selectionButtonPtr != nullptr && selectionButtonPtr->getToggleState();
         const auto range = useSelection ? context.selectionRange : context.fullRange;
-        rangeLabel->setText ("Will export: " + describeRange (range), juce::dontSendNotification);
+        rangeLabelPtr->setText ("Will export: " + describeRange (range), juce::dontSendNotification);
     };
 
     wholeFileButton->onClick = updateExportRangeLabel;
@@ -176,13 +178,6 @@ void AudioExporter::showExportDialog (const ExportContext& context)
 
                               editPtr->flushState();
 
-                              if (! te::Renderer::checkTargetFile (*enginePtr, f))
-                              {
-                                  if (setStatus)
-                                      setStatus ("Export cancelled");
-                                  return;
-                              }
-
                               enginePtr->getPropertyStorage().setDefaultLoadSaveDirectory ("editExport", f.getParentDirectory());
                               if (setStatus)
                                   setStatus ("Exporting...");
@@ -214,16 +209,11 @@ void AudioExporter::showExportDialog (const ExportContext& context)
                               {
                                   if (setStatus)
                                       setStatus ("Exported to " + f.getFileName());
-                                  juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
-                                                                          "Export Complete",
-                                                                          "File written to:\n" + rendered.getFullPathName());
                               }
                               else
                               {
                                   if (setStatus)
                                       setStatus ("Export failed");
-                                  enginePtr->getUIBehaviour().showWarningAlert ("Export failed",
-                                                                                 "The file could not be written.");
                               }
                           });
 }

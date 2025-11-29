@@ -54,8 +54,15 @@ public:
 
     ~NonDestructiveEditorComponent() override
     {
+        stopTimer();
+
         if (edit != nullptr)
             edit->getTransport().removeChangeListener (this);
+
+        thumbnail.reset();
+        clipboard.clear();
+        segments.clear();
+        selection.reset();
 
         engine.getTemporaryFileManager().getTempDirectory().deleteRecursively();
     }

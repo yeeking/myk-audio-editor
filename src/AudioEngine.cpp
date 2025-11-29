@@ -74,33 +74,10 @@ namespace
     public:
         void runTaskWithProgressBar (te::ThreadPoolJobWithProgress& task) override
         {
-            double progressValue = task.getCurrentTaskProgress();
-            std::unique_ptr<juce::DialogWindow> dialog;
-            {
-                const juce::MessageManagerLock mmLock;
-                auto progressComponent = std::make_unique<RenderProgressComponent> (task, progressValue);
-
-                juce::DialogWindow::LaunchOptions options;
-                options.dialogTitle = task.getJobName().isNotEmpty() ? task.getJobName() : juce::String ("Processing");
-                options.escapeKeyTriggersCloseButton = false;
-                options.useNativeTitleBar = true;
-                options.resizable = false;
-                options.content.setOwned (progressComponent.release());
-                dialog.reset (options.create());
-                dialog->centreWithSize (360, 140);
-                dialog->setVisible (true);
-            }
-
             RenderTaskRunner runner (task);
 
             while (runner.isThreadRunning())
-            {
-                if (! juce::MessageManager::getInstance()->runDispatchLoopUntil (50))
-                    break;
-            }
-
-            const juce::MessageManagerLock mmLock;
-            dialog.reset();
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
         }
     };
 }
