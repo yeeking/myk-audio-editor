@@ -8,7 +8,8 @@
 #include <JuceHeader.h>
 #include "../libs/tracktion_engine/examples/common/Utilities.h"
 #include "../libs/tracktion_engine/examples/common/Components.h"
-#include "../libs/tracktion_engine/examples/common/PluginWindow.h"
+#include "AudioEngine.h"
+#include "AudioExporter.h"
 #include <algorithm>
 #include <memory>
 #include <optional>
@@ -23,13 +24,15 @@ class NonDestructiveEditorComponent  : public juce::Component,
                                        private juce::Timer
 {
 public:
-    NonDestructiveEditorComponent (te::Engine& e)
-        : engine (e), waveformView (*this)
+    NonDestructiveEditorComponent (IAudioEngine& engineInterface, IAudioExporter& exporterInterface)
+        : audioEngine (engineInterface),
+          audioExporter (exporterInterface),
+          engine (engineInterface.getEngine()),
+          waveformView (*this)
     {
         addAndMakeVisible (loadButton);
         addAndMakeVisible (playPauseButton);
         addAndMakeVisible (exportButton);
-        addAndMakeVisible (addPluginButton);
         addAndMakeVisible (copyButton);
         addAndMakeVisible (cutButton);
         addAndMakeVisible (pasteButton);
@@ -71,7 +74,6 @@ public:
         loadButton.setBounds (top.removeFromLeft (buttonW).reduced (2));
         playPauseButton.setBounds (top.removeFromLeft (buttonW).reduced (2));
         exportButton.setBounds (top.removeFromLeft (buttonW).reduced (2));
-        addPluginButton.setBounds (top.removeFromLeft (buttonW).reduced (2));
         copyButton.setBounds (top.removeFromLeft (buttonW / 2).reduced (2));
         cutButton.setBounds (top.removeFromLeft (buttonW / 2).reduced (2));
         pasteButton.setBounds (top.removeFromLeft (buttonW / 2).reduced (2));
@@ -478,7 +480,6 @@ private:
         loadButton.onClick = [this] { loadFromChooser(); };
         exportButton.onClick = [this] { exportToFile(); };
         playPauseButton.onClick = [this] { togglePlay(); };
-        addPluginButton.onClick = [this] { addPlugin(); };
         copyButton.onClick = [this] { copySelection(); };
         cutButton.onClick = [this] { cutSelection(); };
         pasteButton.onClick = [this] { pasteClipboard(); };
@@ -486,9 +487,7 @@ private:
 
     void createNewEdit()
     {
-        auto editFile = engine.getTemporaryFileManager().getTempFile ("nonDestructiveMVP").withFileExtension (te::projectFileSuffix);
-        edit = te::createEmptyEdit (engine, editFile);
-        edit->playInStopEnabled = true;
+        edit = audioEngine.createEmptyEdit ("nonDestructiveMVP");
         edit->getTransport().addChangeListener (this);
         track = EngineHelpers::getOrInsertAudioTrackAt (*edit, 0);
         selection.reset();
@@ -534,6 +533,8 @@ private:
         thumbnail = std::make_unique<te::SmartThumbnail> (engine, audioFile, *this, nullptr);
         setViewToWholeFile();
         rebuildTrack();
+        setInsertionPoint (0_tp);
+        lastPlayStart = 0_tp;
 
         statusLabel.setText ("Loaded " + file.getFileName(), juce::dontSendNotification);
         updateSelectionLabel();
@@ -565,20 +566,16 @@ private:
     void togglePlay()
     {
         if (edit != nullptr)
+        {
+            auto& transport = edit->getTransport();
+            if (! transport.isPlaying())
+                lastPlayStart = transport.getPosition();
             EngineHelpers::togglePlay (*edit, EngineHelpers::ReturnToStart::no);
+        }
     }
 
     void addPlugin()
     {
-        if (edit == nullptr || track == nullptr)
-            return;
-
-        if (auto plugin = showMenuAndCreatePlugin (*edit))
-        {
-            track->pluginList.insertPlugin (plugin, track->pluginList.size(), nullptr);
-            plugin->showWindowExplicitly();
-            statusLabel.setText ("Inserted plugin: " + plugin->getName(), juce::dontSendNotification);
-        }
     }
 
     void beginSelection (TimePosition start)
@@ -792,117 +789,29 @@ private:
         if (edit == nullptr || segments.empty())
             return;
 
-        juce::AlertWindow dialog ("Export Options", "Choose export settings", juce::MessageBoxIconType::NoIcon);
-        const juce::String formatId = "format", rateId = "rate", depthId = "depth",
-                            qualId = "quality", nameId = "name", bitrateId = "bitrate";
+        // Ensure playback and contexts are stopped before exporting to avoid active play contexts.
+        auto& transport = edit->getTransport();
+        if (transport.isPlaying())
+            transport.stop (false, true);
 
-        auto defaultName = loadedFile.existsAsFile() ? loadedFile.getFileNameWithoutExtension() : juce::String ("Export");
-        dialog.addTextEditor (nameId, defaultName, "Filename");
+        // Explicitly free playback context to satisfy renderer assertion.
+        if (transport.isPlayContextActive())
+            transport.freePlaybackContext();
 
-        dialog.addComboBox (formatId, { "WAV", "AIFF", "FLAC", "OGG", "MP3", "M4A" }, "Format");
-        auto* formatBox = dialog.getComboBoxComponent (formatId);
-        formatBox->setSelectedId (1); // WAV
+        const bool hasSelection = selection && selection->getLength() > 0s;
+        const auto fullRange = TimeRange { 0_tp, TimePosition::fromSeconds (getTotalLength().inSeconds()) };
+        const auto selectionRange = hasSelection ? *selection : fullRange;
 
-        dialog.addComboBox (rateId, { "44100", "48000", "96000" }, "Sample rate (Hz)");
-        auto* rateBox = dialog.getComboBoxComponent (rateId);
-        rateBox->setSelectedId (1);
+        ExportContext ctx;
+        ctx.engine = &engine;
+        ctx.edit = edit.get();
+        ctx.selectionRange = selectionRange;
+        ctx.fullRange = fullRange;
+        ctx.hasSelection = hasSelection;
+        ctx.defaultName = loadedFile.existsAsFile() ? loadedFile.getFileNameWithoutExtension() : juce::String ("Export");
+        ctx.setStatus = [this] (const juce::String& text) { statusLabel.setText (text, juce::dontSendNotification); };
 
-        dialog.addComboBox (depthId, { "16", "24", "32 (float)" }, "Bit depth");
-        auto* depthBox = dialog.getComboBoxComponent (depthId);
-        depthBox->setSelectedId (1);
-
-        dialog.addComboBox (qualId, { "Low (0)", "Medium (4)", "High (6)", "Max (10)" }, "Ogg quality");
-        auto* qualityBox = dialog.getComboBoxComponent (qualId);
-        qualityBox->setSelectedId (3);
-
-        dialog.addComboBox (bitrateId, { "128", "192", "256", "320" }, "Bitrate (kbps)");
-        auto* bitrateBox = dialog.getComboBoxComponent (bitrateId);
-        bitrateBox->setSelectedId (3);
-
-        auto updateVisibility = [formatBox, depthBox, qualityBox, bitrateBox]
-        {
-            auto fmt = formatBox->getText().toLowerCase();
-            const bool isOgg = fmt.contains ("ogg");
-            const bool isMp3 = fmt.contains ("mp3");
-            const bool isM4a = fmt.contains ("m4a");
-            const bool compressed = isOgg || isMp3 || isM4a;
-
-            if (depthBox != nullptr)
-                depthBox->setEnabled (! compressed);
-            if (qualityBox != nullptr)
-                qualityBox->setVisible (isOgg);
-            if (bitrateBox != nullptr)
-                bitrateBox->setVisible (isMp3 || isM4a);
-        };
-
-        formatBox->onChange = updateVisibility;
-        updateVisibility();
-
-        dialog.addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-        dialog.addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
-
-        if (dialog.runModalLoop() != 1)
-            return;
-
-        auto fmtName = formatBox != nullptr ? formatBox->getText() : juce::String ("WAV");
-        auto rateStr = rateBox != nullptr ? rateBox->getText() : juce::String ("44100");
-        auto depthStr = depthBox != nullptr ? depthBox->getText() : juce::String ("16");
-        auto qualIndex = qualityBox != nullptr ? qualityBox->getSelectedItemIndex() : 2;
-        auto bitrateStr = bitrateBox != nullptr ? bitrateBox->getText() : juce::String ("256");
-
-        auto oggQuality = juce::jlimit (0, 10, qualIndex == 0 ? 0 : (qualIndex == 1 ? 4 : (qualIndex == 2 ? 6 : 10)));
-        auto bitrate = juce::jlimit (64, 512, bitrateStr.getIntValue());
-
-        double chosenRate = rateStr.getDoubleValue();
-        int chosenDepth = depthStr.contains ("32") ? 32 : depthStr.getIntValue();
-
-        auto fmtLower = fmtName.toLowerCase();
-        juce::String extension = "wav";
-        if (fmtLower.contains ("aiff")) extension = "aiff";
-        else if (fmtLower.contains ("flac")) extension = "flac";
-        else if (fmtLower.contains ("ogg")) extension = "ogg";
-        else if (fmtLower.contains ("mp3")) extension = "mp3";
-        else if (fmtLower.contains ("m4a")) extension = "m4a";
-
-        auto pattern = "*." + extension;
-        auto chooser = std::make_shared<juce::FileChooser> ("Choose export destination",
-                                                            engine.getPropertyStorage().getDefaultLoadSaveDirectory ("editExport")
-                                                                .getChildFile (dialog.getTextEditorContents (nameId))
-                                                                .withFileExtension (extension),
-                                                            pattern);
-
-        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
-                              [this, chooser, fmtName, chosenRate, chosenDepth, oggQuality, bitrate] (const juce::FileChooser&) mutable
-                              {
-                                  auto f = chooser->getResult();
-                                  if (f == juce::File())
-                                      return;
-
-                                  engine.getPropertyStorage().setDefaultLoadSaveDirectory ("editExport", f.getParentDirectory());
-                                  statusLabel.setText ("Exporting...", juce::dontSendNotification);
-
-                                  auto lower = fmtName.toLowerCase();
-                                  const bool isOgg = lower.contains ("ogg");
-                                  const bool isMp3 = lower.contains ("mp3");
-                                  const bool isM4a = lower.contains ("m4a");
-
-                                  te::Renderer::Parameters params (engine);
-                                  params.edit = edit.get();
-                                  params.destFile = f;
-                                  params.time = { 0_tp, TimePosition::fromSeconds (getTotalLength().inSeconds()) };
-                                  params.sampleRateForAudio = chosenRate > 0 ? chosenRate : 44100.0;
-                                  params.bitDepth = isOgg || isMp3 || isM4a ? 16 : chosenDepth;
-                                  params.quality = isOgg ? oggQuality : (isMp3 || isM4a ? bitrate : 0);
-                                  auto format = createFormat (fmtName);
-                                  if (format == nullptr)
-                                      format = std::make_unique<juce::WavAudioFormat>();
-                                  params.audioFormat = format.release(); // managed below
-                                  params.ditheringEnabled = params.bitDepth < 32 && ! (isOgg || isMp3 || isM4a);
-
-                                  std::unique_ptr<juce::AudioFormat> ownedFormat (params.audioFormat);
-                                  te::Renderer::renderToFile ("Exporting", params);
-                                  statusLabel.setText ("Exported to " + f.getFileName(), juce::dontSendNotification);
-                              });
+        audioExporter.showExportDialog (ctx);
     }
 
     TimeDuration getTotalLength() const
@@ -1086,6 +995,13 @@ private:
         }
     }
 
+    juce::String describeRange (TimeRange range) const
+    {
+        return juce::String (range.getStart().inSeconds(), 2) + "s to "
+             + juce::String (range.getEnd().inSeconds(), 2) + "s ("
+             + juce::String (range.getLength().inSeconds(), 2) + "s)";
+    }
+
     void changeListenerCallback (juce::ChangeBroadcaster*) override
     {
         const bool playing = edit != nullptr && edit->getTransport().isPlaying();
@@ -1097,6 +1013,7 @@ private:
         updateViewForPlayback();
         waveformView.repaint();
 
+        handlePlaybackEnd();
         handleScrub();
     }
 
@@ -1105,6 +1022,31 @@ private:
         waveformView.repaint();
     }
 
+    void handlePlaybackEnd()
+    {
+        if (edit == nullptr)
+            return;
+
+        auto& transport = edit->getTransport();
+        if (! transport.isPlaying())
+            return;
+
+        auto total = getTotalLength();
+        if (total <= 0s)
+            return;
+
+        auto endPos = TimePosition::fromSeconds (total.inSeconds());
+        auto pos = transport.getPosition();
+
+        if (pos >= endPos)
+        {
+            transport.stop (false, false);
+            setInsertionPoint (lastPlayStart);
+        }
+    }
+
+    IAudioEngine& audioEngine;
+    IAudioExporter& audioExporter;
     te::Engine& engine;
     std::unique_ptr<te::Edit> edit;
     te::AudioTrack* track = nullptr;
@@ -1122,9 +1064,10 @@ private:
     std::vector<ClipboardFragment> clipboard;
     std::optional<TimeRange> selection;
     TimePosition insertionPoint { 0_tp };
+    TimePosition lastPlayStart { 0_tp };
 
     juce::TextButton loadButton { "Load Audio" }, playPauseButton { "Play" }, exportButton { "Export" },
-                     addPluginButton { "Add Plugin" }, copyButton { "Copy" }, cutButton { "Cut" }, pasteButton { "Paste" };
+                     copyButton { "Copy" }, cutButton { "Cut" }, pasteButton { "Paste" };
     juce::Label selectionLabel, statusLabel;
     WaveformView waveformView;
 };

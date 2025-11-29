@@ -22,8 +22,10 @@ juce_add_gui_app(NonDestructiveEditorApp
 juce_generate_juce_header(NonDestructiveEditorApp)
 
 set(APP_SOURCES
-    src/main.cpp
+    src/MainController.cpp
     src/NonDestructiveEditorComponent.h
+    src/AudioEngine.cpp
+    src/AudioExporter.cpp
     src/common_sources.cpp
 )
 
